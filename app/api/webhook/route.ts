@@ -7,6 +7,7 @@ import {
   parsePostbackEvents,
   parseReadEvents,
   verifyWebhookSignature,
+  normalizePagePayload,
 } from "@/lib/meta/webhook";
 import { MESSAGE_JOB_NAME, POSTBACK_JOB_NAME } from "@/lib/queue/client";
 import { Prisma } from "@/app/generated/prisma/client";
@@ -59,7 +60,8 @@ export async function POST(request: NextRequest) {
 
   let payload: unknown;
   try {
-    payload = JSON.parse(rawBody);
+    // Facebook Page webhooks are turned into the Instagram shape (ids "fb:…").
+    payload = normalizePagePayload(JSON.parse(rawBody));
   } catch {
     return NextResponse.json(
       { success: false, error: "Invalid JSON" },

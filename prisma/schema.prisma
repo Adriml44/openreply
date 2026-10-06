@@ -127,7 +127,12 @@ model WorkspaceInvitation {
 model InstagramAccount {
   id                String   @id @default(cuid())
   workspaceId       String
+  /// For Facebook, Threads and YouTube the native id is stored prefixed
+  /// ("fb:", "th:", "yt:") so it never collides with an Instagram id and the
+  /// Meta client can route each call to the right API (see lib/social/ids.ts).
   instagramId       String   @unique
+  /// INSTAGRAM | FACEBOOK | THREADS | YOUTUBE
+  platform          String   @default("INSTAGRAM")
   username          String
   name              String?
   accessToken       String
@@ -171,6 +176,9 @@ model Automation {
   instagramAccountId String
 
   name           String
+  /// Campaigns created together across several networks share a groupId: one
+  /// Automation per network, each with its own post, DM and public replies.
+  groupId        String?
   goal           String?
   postId         String?
   postUrl        String?
@@ -215,6 +223,7 @@ model Automation {
   @@index([workspaceId])
   @@index([instagramAccountId])
   @@index([postId])
+  @@index([groupId])
 }
 
 model DmLog {

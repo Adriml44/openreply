@@ -14,7 +14,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import AccountSelect, { type AccountOption } from "@/components/account-select";
+import { type AccountOption, accountLabel, PLATFORM_NAME } from "@/components/account-select";
 import PostPicker from "@/components/post-picker";
 import CampaignPreview, { type PreviewTab } from "@/components/campaign-preview";
 import { readCache, writeCache } from "@/lib/client-cache";
@@ -53,7 +53,58 @@ interface LoadedCampaign {
   publicReplyMessages: string[];
   isActive: boolean;
   instagramAccountId: string;
+  groupId?: string | null;
   trackedLinks?: { destinationUrl: string; label?: string | null }[];
+}
+
+/* Everything that can differ from one network to another inside the same
+   campaign: which post, the public replies, the DMs, the follow gate. The
+   campaign name and the keywords are shared. */
+interface NetCfg {
+  triggerScope: TriggerScope;
+  postId: string | null;
+  postUrl: string | null;
+  postThumb: string | null;
+  postCaption: string;
+  dmTriggerEnabled: boolean;
+  publicReplyEnabled: boolean;
+  publicReplyMessages: string[];
+  openingDmEnabled: boolean;
+  openingDmMessage: string;
+  openingDmButtonLabel: string;
+  dmMessage: string;
+  linkOpen: boolean;
+  trackedDestinationUrl: string;
+  linkButtonLabel: string;
+  secondLinkOpen: boolean;
+  secondaryDestinationUrl: string;
+  secondaryButtonLabel: string;
+  requireFollow: boolean;
+  followPromptMessage: string;
+  followPromptButtonLabel: string;
+  followUpEnabled: boolean;
+  followUpMessage: string;
+  followUpDelayMinutes: number;
+}
+
+// Threads and YouTube have no DMs in their APIs: there the campaign only replies in public.
+const isPublicOnly = (platform?: string) => platform === "THREADS" || platform === "YOUTUBE";
+
+function cfgFromCampaign(c: LoadedCampaign): NetCfg {
+  const link = c.trackedLinks?.[0]?.destinationUrl ?? "";
+  const second = c.trackedLinks?.[1];
+  return {
+    triggerScope: c.matchAnyPost ? "any" : c.pendingNextReel ? "next" : "specific",
+    postId: c.postId, postUrl: c.postUrl, postThumb: null, postCaption: "",
+    dmTriggerEnabled: c.dmTriggerEnabled ?? false,
+    publicReplyEnabled: c.publicReplyEnabled,
+    publicReplyMessages: c.publicReplyMessages?.length ? c.publicReplyMessages : c.publicReplyMessage ? [c.publicReplyMessage] : [""],
+    openingDmEnabled: c.openingDmEnabled, openingDmMessage: c.openingDmMessage ?? "", openingDmButtonLabel: c.openingDmButtonLabel ?? "",
+    dmMessage: c.dmMessage, linkOpen: Boolean(link), trackedDestinationUrl: link, linkButtonLabel: c.linkButtonLabel ?? "Open link",
+    secondLinkOpen: Boolean(second?.destinationUrl), secondaryDestinationUrl: second?.destinationUrl ?? "", secondaryButtonLabel: second?.label ?? "Open link",
+    requireFollow: c.requireFollow ?? false, followPromptMessage: c.followPromptMessage ?? "", followPromptButtonLabel: c.followPromptButtonLabel ?? "i'm following",
+    followUpEnabled: c.followUpEnabled ?? false, followUpMessage: c.followUpMessage ?? "", followUpDelayMinutes: c.followUpDelayMinutes ?? 0,
+  };
 }
 
 interface CampaignBuilderProps {
@@ -183,6 +234,13 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
 
   const [previewTab, setPreviewTab] = useState<PreviewTab>("dm");
 
+  // Multi-network: the accounts in this campaign (tab order), the saved config
+  // of every tab that is not on screen, and the campaign id behind each one.
+  const [netOrder, setNetOrder] = useState<string[]>([]);
+  const [netCfgs, setNetCfgs] = useState<Record<string, NetCfg>>({});
+  const [netIds, setNetIds] = useState<Record<string, string>>({});
+  const [groupId, setGroupId] = useState<string | null>(null);
+
   // CSV import queue. When present, each save advances to the next row instead
   // of returning to the campaigns list.
   const [importQueue, setImportQueue] = useState<ImportRow[] | null>(null);
@@ -247,8 +305,15 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
       .then((r) => r.json())
       .then((payload) => {
         if (!payload.success) return setNotFound(true);
-        const c = (payload.data as LoadedCampaign[]).find((x) => x.id === campaignId);
+        const all = payload.data as LoadedCampaign[];
+        const c = all.find((x) => x.id === campaignId);
         if (!c) return setNotFound(true);
+        // The same campaign on other networks (same groupId) is edited together.
+        const group = c.groupId ? all.filter((x) => x.groupId === c.groupId) : [c];
+        setGroupId(c.groupId ?? null);
+        setNetOrder(group.map((x) => x.instagramAccountId));
+        setNetIds(Object.fromEntries(group.map((x) => [x.instagramAccountId, x.id])));
+        setNetCfgs(Object.fromEntries(group.filter((x) => x.id !== c.id).map((x) => [x.instagramAccountId, cfgFromCampaign(x)])));
         setName(c.name);
         setSelectedAccountId(c.instagramAccountId);
         setTriggerScope(
@@ -367,6 +432,62 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
   const username =
     accounts.find((a) => a.id === selectedAccountId)?.username ?? "yourbrand";
 
+  const platformOfAccount = (id: string) => accounts.find((a) => a.id === id)?.platform ?? "INSTAGRAM";
+  const activePlatform = platformOfAccount(selectedAccountId);
+  const publicOnly = isPublicOnly(activePlatform);
+
+  function snapshot(): NetCfg {
+    return { triggerScope, postId, postUrl, postThumb, postCaption, dmTriggerEnabled, publicReplyEnabled, publicReplyMessages,
+      openingDmEnabled, openingDmMessage, openingDmButtonLabel, dmMessage, linkOpen, trackedDestinationUrl, linkButtonLabel,
+      secondLinkOpen, secondaryDestinationUrl, secondaryButtonLabel, requireFollow, followPromptMessage, followPromptButtonLabel,
+      followUpEnabled, followUpMessage, followUpDelayMinutes };
+  }
+  function loadCfg(c: NetCfg) {
+    setTriggerScope(c.triggerScope); setPostId(c.postId); setPostUrl(c.postUrl); setPostThumb(c.postThumb); setPostCaption(c.postCaption);
+    setDmTriggerEnabled(c.dmTriggerEnabled); setPublicReplyEnabled(c.publicReplyEnabled); setPublicReplyMessages(c.publicReplyMessages);
+    setOpeningDmEnabled(c.openingDmEnabled); setOpeningDmMessage(c.openingDmMessage); setOpeningDmButtonLabel(c.openingDmButtonLabel);
+    setDmMessage(c.dmMessage); setLinkOpen(c.linkOpen); setTrackedDestinationUrl(c.trackedDestinationUrl); setLinkButtonLabel(c.linkButtonLabel);
+    setSecondLinkOpen(c.secondLinkOpen); setSecondaryDestinationUrl(c.secondaryDestinationUrl); setSecondaryButtonLabel(c.secondaryButtonLabel);
+    setRequireFollow(c.requireFollow); setFollowPromptMessage(c.followPromptMessage); setFollowPromptButtonLabel(c.followPromptButtonLabel);
+    setFollowUpEnabled(c.followUpEnabled); setFollowUpMessage(c.followUpMessage); setFollowUpDelayMinutes(c.followUpDelayMinutes);
+  }
+  /* A network added to the campaign starts from what is on screen (same link,
+     same texts) so you only change what is different. Threads/YouTube start
+     with public replies on and three slots, since that is all they can do. */
+  function startCfgFor(accountId: string): NetCfg {
+    const base = { ...snapshot(), triggerScope: "any" as TriggerScope, postId: null, postUrl: null, postThumb: null, postCaption: "" };
+    if (isPublicOnly(platformOfAccount(accountId))) {
+      const replies = base.publicReplyMessages.filter((m) => m.trim());
+      return { ...base, publicReplyEnabled: true, dmTriggerEnabled: false, openingDmEnabled: false, requireFollow: false, followUpEnabled: false,
+        publicReplyMessages: [...replies, "", "", ""].slice(0, Math.max(3, replies.length)) };
+    }
+    return base;
+  }
+  function switchNetwork(accountId: string) {
+    if (accountId === selectedAccountId) return;
+    setNetCfgs((prev) => ({ ...prev, [selectedAccountId]: snapshot() }));
+    loadCfg(netCfgs[accountId] ?? startCfgFor(accountId));
+    setSelectedAccountId(accountId);
+  }
+  function toggleNetwork(accountId: string) {
+    const order = netOrder.length ? netOrder : [selectedAccountId];
+    if (order.includes(accountId)) {
+      if (order.length === 1) return;
+      const rest = order.filter((x) => x !== accountId);
+      setNetOrder(rest);
+      if (accountId === selectedAccountId) {
+        const next = rest[0];
+        loadCfg(netCfgs[next] ?? startCfgFor(next));
+        setSelectedAccountId(next);
+      }
+      return;
+    }
+    setNetOrder([...order, accountId]);
+    setNetCfgs((prev) => ({ ...prev, [selectedAccountId]: snapshot(), [accountId]: startCfgFor(accountId) }));
+    loadCfg(startCfgFor(accountId));
+    setSelectedAccountId(accountId);
+  }
+
   function handlePostSelect(
     id: string,
     url?: string,
@@ -386,64 +507,91 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
   async function handleSubmit(activeValue: boolean) {
     setError(null);
 
-    if (!selectedAccountId) return setError("Connect an Instagram account first.");
-    if (triggerScope === "specific" && !postId)
-      return setError("Pick a post or reel to trigger the campaign.");
+    if (!selectedAccountId) return setError("Connect an account first.");
     if (matchMode === "specific" && keywords.length === 0)
       return setError("Add at least one keyword, or switch to any word.");
-    if (!dmMessage.trim()) return setError("Add the DM with the link.");
-    if (openingDmEnabled && (!openingDmMessage.trim() || !openingDmButtonLabel.trim()))
-      return setError("Your opening DM needs a message and a button label.");
+
+    // Every network in the campaign, each with its own settings.
+    const order = netOrder.length ? netOrder : [selectedAccountId];
+    const cfgs: Record<string, NetCfg> = { ...netCfgs, [selectedAccountId]: snapshot() };
+    for (const acc of order) {
+      const c = cfgs[acc] ?? startCfgFor(acc);
+      const net = PLATFORM_NAME[platformOfAccount(acc)] ?? "Instagram";
+      const replies = new Set(c.publicReplyMessages.map((m) => m.trim().toLowerCase()).filter(Boolean));
+      if (c.triggerScope === "specific" && !c.postId) return setError(`${net}: pick the post that triggers the campaign.`);
+      if (isPublicOnly(platformOfAccount(acc))) {
+        if (replies.size < 3) return setError(`${net}: add at least 3 different public replies — they rotate so it never looks like spam.`);
+      } else {
+        if (!c.dmMessage.trim()) return setError(`${net}: add the DM with the link.`);
+        if (c.openingDmEnabled && (!c.openingDmMessage.trim() || !c.openingDmButtonLabel.trim()))
+          return setError(`${net}: the opening DM needs a message and a button label.`);
+      }
+    }
 
     setSaving(true);
-
-    const payload = {
+    const group = order.length > 1 ? groupId ?? `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}` : groupId;
+    const shared = {
       name: name.trim() || `Campaign for @${username}`,
-      instagramAccountId: selectedAccountId,
-      postId: triggerScope === "specific" ? postId : null,
-      postUrl: triggerScope === "specific" ? postUrl : null,
-      matchAnyPost: triggerScope === "any",
-      pendingNextReel: triggerScope === "next",
       matchAnyWord: matchMode === "any",
       keywords: matchMode === "any" ? [] : keywords,
-      dmTriggerEnabled,
-      dmMessage,
-      openingDmEnabled,
-      openingDmMessage: openingDmEnabled ? openingDmMessage : null,
-      openingDmButtonLabel: openingDmEnabled ? openingDmButtonLabel : null,
-      publicReplyEnabled,
-      publicReplyMessages: publicReplyEnabled
-        ? publicReplyMessages.map((m) => m.trim()).filter(Boolean)
-        : [],
-      trackedDestinationUrl: trackedDestinationUrl.trim() || "",
-      linkButtonLabel: linkButtonLabel.trim() || "Open link",
-      secondaryDestinationUrl: secondaryDestinationUrl.trim() || "",
-      secondaryButtonLabel: secondaryButtonLabel.trim() || "Open link",
-      requireFollow,
-      followPromptMessage: requireFollow ? followPromptMessage.trim() : "",
-      followPromptButtonLabel: requireFollow
-        ? followPromptButtonLabel.trim() || "i'm following"
-        : "",
-      followUpEnabled,
-      followUpMessage: followUpEnabled ? followUpMessage.trim() : "",
-      followUpDelayMinutes: followUpEnabled ? followUpDelayMinutes : 0,
       isActive: activeValue,
+      groupId: group,
     };
+    const payloadFor = (acc: string, c: NetCfg) => {
+      const pub = isPublicOnly(platformOfAccount(acc));
+      const replies = c.publicReplyMessages.map((m) => m.trim()).filter(Boolean);
+      return {
+        ...shared,
+        instagramAccountId: acc,
+        postId: c.triggerScope === "specific" ? c.postId : null,
+        postUrl: c.triggerScope === "specific" ? c.postUrl : null,
+        matchAnyPost: c.triggerScope === "any",
+        pendingNextReel: c.triggerScope === "next",
+        dmTriggerEnabled: pub ? false : c.dmTriggerEnabled,
+        // Threads/YouTube never send a DM; the field is required, so it carries the first reply.
+        dmMessage: pub ? replies[0] ?? "-" : c.dmMessage,
+        openingDmEnabled: pub ? false : c.openingDmEnabled,
+        openingDmMessage: !pub && c.openingDmEnabled ? c.openingDmMessage : null,
+        openingDmButtonLabel: !pub && c.openingDmEnabled ? c.openingDmButtonLabel : null,
+        publicReplyEnabled: pub ? true : c.publicReplyEnabled,
+        publicReplyMessages: pub || c.publicReplyEnabled ? replies : [],
+        trackedDestinationUrl: c.trackedDestinationUrl.trim() || "",
+        linkButtonLabel: c.linkButtonLabel.trim() || "Open link",
+        secondaryDestinationUrl: pub ? "" : c.secondaryDestinationUrl.trim() || "",
+        secondaryButtonLabel: c.secondaryButtonLabel.trim() || "Open link",
+        requireFollow: pub ? false : c.requireFollow,
+        followPromptMessage: !pub && c.requireFollow ? c.followPromptMessage.trim() : "",
+        followPromptButtonLabel: !pub && c.requireFollow ? c.followPromptButtonLabel.trim() || "i'm following" : "",
+        followUpEnabled: pub ? false : c.followUpEnabled,
+        followUpMessage: !pub && c.followUpEnabled ? c.followUpMessage.trim() : "",
+        followUpDelayMinutes: !pub && c.followUpEnabled ? c.followUpDelayMinutes : 0,
+      };
+    };
+    // Networks taken out of an existing campaign are paused, not deleted (their logs stay).
+    const removed = Object.entries(netIds).filter(([acc]) => !order.includes(acc));
+    const payload = payloadFor(selectedAccountId, cfgs[selectedAccountId]);
 
     try {
-      const res =
-        mode === "new"
-          ? await fetch("/api/automations", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-            })
-          : await fetch(`/api/automations?id=${campaignId}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-            });
-      const data = await res.json();
+      // One request per network: PATCH the ones that already exist, POST the new ones.
+      let data: { success: boolean; error?: string; details?: { fieldErrors?: Record<string, string[]> } } = { success: true };
+      for (const acc of order) {
+        const body = JSON.stringify(payloadFor(acc, cfgs[acc] ?? startCfgFor(acc)));
+        const existing = netIds[acc] ?? (mode === "edit" && acc === selectedAccountId && !netOrder.length ? campaignId : undefined);
+        const res = existing
+          ? await fetch(`/api/automations?id=${existing}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body })
+          : await fetch("/api/automations", { method: "POST", headers: { "Content-Type": "application/json" }, body });
+        data = await res.json();
+        if (!data.success) {
+          data.error = `${PLATFORM_NAME[platformOfAccount(acc)] ?? ""}: ${data.error ?? "failed to save"}`;
+          break;
+        }
+      }
+      if (data.success) {
+        for (const [, id] of removed) {
+          await fetch(`/api/automations?id=${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ isActive: false, groupId: null }) });
+        }
+      }
       if (data.success) {
         // The post we just assigned is now in use. Reflect it immediately so
         // the picker flags it on the next imported row — the fetch that builds
@@ -649,20 +797,32 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
             className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground placeholder:text-zinc-500 focus:border-accent/40 focus:outline-none"
             maxLength={100}
           />
-          {accounts.length > 1 && (
-            <div className="pt-2">
-              <AccountSelect
-                accounts={accounts}
-                value={selectedAccountId}
-                onChange={(id) => {
-                  setSelectedAccountId(id);
-                  setPostId(null);
-                  setPostUrl(null);
-                  setPostThumb(null);
-                }}
-                includeAll={false}
-                label="Instagram account"
-              />
+          {accounts.length > 0 && (
+            <div className="pt-2 space-y-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Networks in this campaign</span>
+              <div className="flex flex-wrap gap-2">
+                {accounts.map((a) => {
+                  const order = netOrder.length ? netOrder : [selectedAccountId];
+                  const inCampaign = order.includes(a.id);
+                  const active = a.id === selectedAccountId;
+                  return (
+                    <div key={a.id} className={`flex items-center rounded-full border text-xs ${active ? "border-accent bg-accent/15 text-foreground" : inCampaign ? "border-accent/40 text-foreground" : "border-border text-muted"}`}>
+                      <button type="button" className="px-3 py-1.5" onClick={() => (inCampaign ? switchNetwork(a.id) : toggleNetwork(a.id))}
+                        title={inCampaign ? "Edit this network" : "Add this network to the campaign"}>
+                        {accountLabel(a)}
+                      </button>
+                      {inCampaign && order.length > 1 && (
+                        <button type="button" className="pr-2.5 text-muted hover:text-error" onClick={() => toggleNetwork(a.id)} aria-label="Remove network">×</button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-muted">
+                Tap a network to add it. Each one keeps its own post, public replies and DMs — you are editing{" "}
+                <strong className="text-foreground">{PLATFORM_NAME[activePlatform]}</strong>.
+                {publicOnly && " Threads and YouTube have no DMs: here the campaign replies under the comment."}
+              </p>
             </div>
           )}
         </div>
@@ -690,12 +850,14 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
           >
             any post or reel
           </Radio>
+          {activePlatform === "INSTAGRAM" && (
           <Radio
             checked={triggerScope === "next"}
             onSelect={() => setTriggerScope("next")}
           >
             next post or reel
           </Radio>
+          )}
         </Section>
 
         <Section title="And this comment has">
@@ -722,6 +884,7 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
           >
             any word
           </Radio>
+          {!publicOnly && (<>
           <div className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2.5">
             <span className="text-sm text-foreground">
               also reply when someone DMs{" "}
@@ -739,16 +902,26 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
                 : "A DM containing any of these words gets the same reply, no comment needed."}
             </p>
           )}
+          </>)}
           <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5">
             <span className="text-sm text-foreground">
               reply to their comments under the post
             </span>
+            {publicOnly ? <span className="text-xs text-muted">always on here</span> : (
             <Toggle
               on={publicReplyEnabled}
               onToggle={() => setPublicReplyEnabled(!publicReplyEnabled)}
-            />
+            />)}
           </div>
-          {publicReplyEnabled && (
+          {publicOnly && (
+            <p className="text-xs text-muted">
+              Write at least 3 different replies: they rotate, go out spread over a few minutes, at most{" "}
+              {activePlatform === "YOUTUBE" ? "12 an hour / 80 a day" : "30 an hour / 200 a day"}, and each person gets one reply per day.
+              That is what keeps {PLATFORM_NAME[activePlatform]} from treating it as spam. Use {"{link}"} to include your tracked link
+              {activePlatform === "YOUTUBE" ? " (YouTube sometimes holds replies with links for review — a reply without the link that points to your bio is the safest)." : "."}
+            </p>
+          )}
+          {(publicReplyEnabled || publicOnly) && (
             <div className="space-y-2">
               {publicReplyMessages.map((msg, i) => (
                 <div key={i} className="flex items-center gap-2">
@@ -798,6 +971,7 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
           )}
         </Section>
 
+        {!publicOnly && (<>
         <Section title="They will get">
           <div className="rounded-lg border border-border p-3">
             <div className="flex items-center justify-between">
@@ -837,6 +1011,11 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
                 onToggle={() => setRequireFollow(!requireFollow)}
               />
             </div>
+            {requireFollow && activePlatform === "FACEBOOK" && (
+              <p className="mt-2 text-xs text-warning">
+                Facebook does not let apps check who follows a Page. They get the follow request and the button, and the link is sent when they tap it.
+              </p>
+            )}
             {requireFollow && (
               <div className="mt-3 space-y-2">
                 <textarea
@@ -979,6 +1158,7 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
             )}
           </div>
         </Section>
+        </>)}
       </div>
 
       {/* Right: preview */}

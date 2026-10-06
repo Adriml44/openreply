@@ -35,6 +35,8 @@ import {
 } from "@/lib/meta/client";
 import { decryptToken } from "@/lib/meta/oauth";
 import { matchKeywords } from "@/lib/utils/keyword-matcher";
+import { platformOf, supportsDm } from "@/lib/social/ids";
+import { getPlatformComments, getPlatformMedia } from "@/lib/social/platforms";
 
 // Only consider comments from the last few days — older ones are outside
 // Instagram's private-reply window anyway, so a DM to them would just fail.
@@ -157,7 +159,10 @@ async function sweepCampaign(
     mediaIds.push(automation.postId);
   } else if (automation.matchAnyPost) {
     try {
-      const media = await getUserMedia(accessToken, RECENT_MEDIA_LIMIT);
+      // Facebook, Threads and YouTube read their own feeds (lib/social).
+      const media = platformOf(account.instagramId) === "INSTAGRAM"
+        ? await getUserMedia(accessToken, RECENT_MEDIA_LIMIT)
+        : await getPlatformMedia(account.instagramId, accessToken, RECENT_MEDIA_LIMIT);
       mediaIds.push(...media.map((m) => m.id));
     } catch (error) {
       stat.errors.push(`Media list: ${errMessage(error)}`);
@@ -166,11 +171,14 @@ async function sweepCampaign(
   if (mediaIds.length === 0) return stat;
 
   const queue = getDMQueue();
+  const publicOnly = !supportsDm(platformOf(account.instagramId));
 
   for (const mediaId of mediaIds) {
     let comments: InstagramComment[];
     try {
-      comments = await getRecentMediaComments(accessToken, mediaId, sinceMs);
+      comments = platformOf(account.instagramId) === "INSTAGRAM"
+        ? await getRecentMediaComments(accessToken, mediaId, sinceMs)
+        : await getPlatformComments(account.instagramId, accessToken, mediaId, sinceMs);
     } catch (error) {
       stat.errors.push(`Comments ${mediaId}: ${errMessage(error)}`);
       continue;
@@ -238,7 +246,10 @@ async function sweepCampaign(
         commenterName: c.from?.username,
         mediaId,
         source: "POLLING",
-      });
+      }, publicOnly
+        // Public replies on Threads/YouTube go out spread over a few minutes, like a person answering.
+        ? { delay: 30_000 + Math.floor(Math.random() * 150_000) * (stat.enqueued + 1) }
+        : undefined);
       stat.enqueued += 1;
     }
   }

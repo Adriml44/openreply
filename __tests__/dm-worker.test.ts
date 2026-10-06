@@ -219,9 +219,11 @@ beforeEach(() => {
   // check (keyed on status SENT) and the postback's name lookup. Only the
   // latter should resolve by default, or every comment would look like a
   // duplicate of an already-answered one.
+  // A third one, the 24 h per-person cooldown (keyed on createdAt), finds
+  // nothing by default either.
   mockPrisma.dmLog.findFirst.mockImplementation(
-    async (args: { where?: { status?: string } } = {}) =>
-      args.where?.status === "SENT" ? null : { commenterName: "commenter_user" }
+    async (args: { where?: { status?: string; createdAt?: unknown } } = {}) =>
+      args.where?.status === "SENT" || args.where?.createdAt ? null : { commenterName: "commenter_user" }
   );
   mockPrisma.dmLog.upsert.mockResolvedValue({});
   mockPrisma.dmLog.update.mockResolvedValue({});
@@ -818,13 +820,33 @@ describe("DM Worker — Full Pipeline", () => {
   });
 });
 
+describe("DM Worker — anti-spam cooldown", () => {
+  it("answers the same person only once per campaign every 24 h", async () => {
+    const processor = getProcessor();
+    mockPrisma.dmLog.findFirst.mockImplementation(
+      async (args: { where?: { status?: string; createdAt?: unknown } } = {}) =>
+        args.where?.createdAt ? { id: "earlier_log" } : null
+    );
+
+    await processor(createMockJob());
+
+    expect(mockSendPrivateReply).not.toHaveBeenCalled();
+    expect(mockSendPrivateReplyWithLinkButton).not.toHaveBeenCalled();
+    expect(mockPrisma.dmLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "SKIPPED_DEDUP" }) })
+    );
+  });
+});
+
 describe("DM Worker — one private reply per comment", () => {
   it("should skip a campaign when another already used the comment's private reply", async () => {
     mockPrisma.dmLog.findFirst.mockImplementation(
-      async (args: { where?: { status?: string } } = {}) =>
-        args.where?.status === "SENT"
-          ? { automation: { name: "openreply 1" } }
-          : { commenterName: "commenter_user" }
+      async (args: { where?: { status?: string; createdAt?: unknown } } = {}) =>
+        args.where?.createdAt
+          ? null
+          : args.where?.status === "SENT"
+            ? { automation: { name: "openreply 1" } }
+            : { commenterName: "commenter_user" }
     );
 
     const processor = getProcessor();

@@ -27,6 +27,11 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  // Facebook / Threads / YouTube: no Instagram profile to fetch; show the saved name.
+  if (account.platform !== "INSTAGRAM") {
+    return NextResponse.json({ success: true, data: { username: account.username, name: account.name ?? null, profilePictureUrl: null } });
+  }
+
   try {
     const token = decryptToken(account.accessToken);
     const info = await getUserInfo(token);
