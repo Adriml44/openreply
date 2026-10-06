@@ -42,6 +42,7 @@ export async function GET(request: NextRequest) {
       workspaceId: true,
       username: true,
       accessToken: true,
+      platform: true,
     },
   });
 
@@ -56,7 +57,9 @@ export async function GET(request: NextRequest) {
     try {
       const currentToken = decryptToken(account.accessToken);
       const { accessToken: newToken, expiresIn } =
-        await refreshLongLivedToken(currentToken);
+        account.platform === "THREADS"
+          ? await refreshThreadsToken(currentToken)
+          : await refreshLongLivedToken(currentToken);
       const encryptedToken = encryptToken(newToken);
       const newExpiry = new Date(Date.now() + expiresIn * 1000);
 
@@ -105,4 +108,13 @@ export async function GET(request: NextRequest) {
       results,
     },
   });
+}
+
+/* Threads long-lived tokens last 60 days and are refreshed the same way. */
+async function refreshThreadsToken(token: string): Promise<{ accessToken: string; expiresIn: number }> {
+  const res = await fetch("https://graph.threads.net/refresh_access_token?" +
+    new URLSearchParams({ grant_type: "th_refresh_token", access_token: token }));
+  const d = await res.json();
+  if (!res.ok || !d.access_token) throw new Error(d?.error?.message ?? "Threads token refresh failed");
+  return { accessToken: d.access_token, expiresIn: d.expires_in };
 }

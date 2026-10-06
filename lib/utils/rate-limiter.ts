@@ -224,3 +224,40 @@ export async function resetRateLimit(
 
 // Export constants for use in tests
 export { RATE_LIMIT_MAX, RATE_LIMIT_WINDOW, REQUEUE_DELAY_MS, MAX_REQUEUE_ATTEMPTS };
+
+/* ---------------------------------------------------------------------------
+   Public replies on Threads and YouTube.
+
+   These networks have no DMs, so the campaign answers in public — exactly
+   what their spam systems watch most. The caps below are deliberately far
+   under each platform's real limits (Threads allows ~1,000 replies a day;
+   YouTube's default quota is ~200 replies a day) so a busy post never looks
+   like a bot. Anything over the cap waits and goes out later, it is not lost.
+   --------------------------------------------------------------------------- */
+const PUBLIC_REPLY_CAPS: Record<string, { hour: number; day: number }> = {
+  THREADS: { hour: 30, day: 200 },
+  YOUTUBE: { hour: 12, day: 80 },
+};
+
+export async function reservePublicReplySlot(
+  accountId: string,
+  platform: string
+): Promise<{ allowed: boolean; retryInMs: number }> {
+  const cap = PUBLIC_REPLY_CAPS[platform];
+  if (!cap) return { allowed: true, retryInMs: 0 };
+  const client = getRedis();
+  const hourKey = `rate:pub:h:${accountId}`;
+  const dayKey = `rate:pub:d:${accountId}`;
+  const day = toScriptNumber(await client.get(dayKey));
+  if (day >= cap.day) {
+    const ttl = await client.ttl(dayKey);
+    return { allowed: false, retryInMs: Math.max(60, ttl) * 1000 };
+  }
+  const hour = await client.eval(RESERVE_DM_SLOT_SCRIPT, 1, hourKey, cap.hour, 3600);
+  if (toScriptNumber(Array.isArray(hour) ? hour[0] : 0) !== 1) {
+    const ttl = await client.ttl(hourKey);
+    return { allowed: false, retryInMs: Math.max(60, ttl) * 1000 };
+  }
+  await client.eval(RESERVE_DM_SLOT_SCRIPT, 1, dayKey, cap.day, 86400);
+  return { allowed: true, retryInMs: 0 };
+}

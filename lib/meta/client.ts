@@ -1,7 +1,18 @@
 import { getMetaGraphApiVersion, requireEnv } from "@/lib/env";
+import { platformOf, rawId } from "@/lib/social/ids";
+import { sendPlatformCommentReply } from "@/lib/social/platforms";
 
 function instagramGraphBase() {
   return `https://graph.instagram.com/${getMetaGraphApiVersion()}`;
+}
+
+/* Instagram accounts message through graph.instagram.com; Facebook Pages
+   (ids stored as "fb:<page id>") through the Messenger API on graph.facebook.com.
+   The request bodies are the same on both. */
+function messagesUrl(accountId: string) {
+  return platformOf(accountId) === "FACEBOOK"
+    ? `${facebookGraphBase()}/${rawId(accountId)}/messages`
+    : `${instagramGraphBase()}/${accountId}/messages`;
 }
 
 function facebookGraphBase() {
@@ -151,7 +162,7 @@ export async function sendPrivateReply(
   message: string
 ): Promise<{ recipient_id: string; message_id: string }> {
   const response = await fetch(
-    `${instagramGraphBase()}/${instagramAccountId}/messages`,
+    messagesUrl(instagramAccountId),
     {
       method: "POST",
       headers: {
@@ -159,7 +170,7 @@ export async function sendPrivateReply(
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
-        recipient: { comment_id: commentId },
+        recipient: { comment_id: rawId(commentId) },
         message: { text: message },
       }),
     }
@@ -183,7 +194,7 @@ export async function sendPrivateReplyWithButton(
   payload: string
 ): Promise<{ recipient_id: string; message_id: string }> {
   const response = await fetch(
-    `${instagramGraphBase()}/${instagramAccountId}/messages`,
+    messagesUrl(instagramAccountId),
     {
       method: "POST",
       headers: {
@@ -191,7 +202,7 @@ export async function sendPrivateReplyWithButton(
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
-        recipient: { comment_id: commentId },
+        recipient: { comment_id: rawId(commentId) },
         message: {
           attachment: {
             type: "template",
@@ -226,7 +237,7 @@ export async function sendDirectMessageWithButton(
   payload: string
 ): Promise<{ recipient_id: string; message_id: string }> {
   const response = await fetch(
-    `${instagramGraphBase()}/${instagramAccountId}/messages`,
+    messagesUrl(instagramAccountId),
     {
       method: "POST",
       headers: {
@@ -234,7 +245,7 @@ export async function sendDirectMessageWithButton(
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
-        recipient: { id: userId },
+        recipient: { id: rawId(userId) },
         message: {
           attachment: {
             type: "template",
@@ -265,6 +276,9 @@ export async function getUserFollowStatus(
   accessToken: string,
   recipientId: string
 ): Promise<boolean | null> {
+  // Only Instagram exposes this. On Facebook there is no way to check a Page
+  // follow, so it is "unknown" and the follow gate works on the user's word.
+  if (platformOf(recipientId) !== "INSTAGRAM") return null;
   const url = new URL(`${instagramGraphBase()}/${recipientId}`);
   url.searchParams.set("fields", "is_user_follow_business");
 
@@ -311,7 +325,7 @@ export async function sendPrivateReplyWithLinkButton(
   buttons: LinkButton[]
 ): Promise<{ recipient_id: string; message_id: string }> {
   const response = await fetch(
-    `${instagramGraphBase()}/${instagramAccountId}/messages`,
+    messagesUrl(instagramAccountId),
     {
       method: "POST",
       headers: {
@@ -319,7 +333,7 @@ export async function sendPrivateReplyWithLinkButton(
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
-        recipient: { comment_id: commentId },
+        recipient: { comment_id: rawId(commentId) },
         message: {
           attachment: {
             type: "template",
@@ -348,7 +362,7 @@ export async function sendDirectMessage(
   message: string
 ): Promise<{ recipient_id: string; message_id: string }> {
   const response = await fetch(
-    `${instagramGraphBase()}/${instagramAccountId}/messages`,
+    messagesUrl(instagramAccountId),
     {
       method: "POST",
       headers: {
@@ -356,7 +370,7 @@ export async function sendDirectMessage(
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
-        recipient: { id: userId },
+        recipient: { id: rawId(userId) },
         message: { text: message },
       }),
     }
@@ -377,7 +391,7 @@ export async function sendDirectMessageWithLinkButton(
   buttons: LinkButton[]
 ): Promise<{ recipient_id: string; message_id: string }> {
   const response = await fetch(
-    `${instagramGraphBase()}/${instagramAccountId}/messages`,
+    messagesUrl(instagramAccountId),
     {
       method: "POST",
       headers: {
@@ -385,7 +399,7 @@ export async function sendDirectMessageWithLinkButton(
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
-        recipient: { id: userId },
+        recipient: { id: rawId(userId) },
         message: {
           attachment: {
             type: "template",
@@ -408,6 +422,9 @@ export async function sendCommentReply(
   commentId: string,
   message: string
 ): Promise<{ id: string }> {
+  if (platformOf(commentId) !== "INSTAGRAM") {
+    return sendPlatformCommentReply(accessToken, commentId, message);
+  }
   const response = await fetch(
     `${instagramGraphBase()}/${commentId}/replies`,
     {

@@ -18,6 +18,7 @@ export const dynamic = "force-dynamic";
 const createAutomationSchema = z
   .object({
     name: z.string().min(1).max(100),
+    groupId: z.string().max(40).optional().nullable(),
     goal: z.string().min(1).max(120).optional().nullable(),
     instagramAccountId: z.string().min(1).optional().nullable(),
     postId: z.string().min(1).optional().nullable(),
@@ -82,6 +83,7 @@ const createAutomationSchema = z
 
 const updateAutomationSchema = z.object({
   name: z.string().min(1).max(100).optional(),
+  groupId: z.string().max(40).optional().nullable(),
   goal: z.string().min(1).max(120).optional().nullable(),
   postId: z.string().min(1).optional().nullable(),
   postUrl: z.string().url().optional().nullable(),
@@ -140,7 +142,7 @@ export async function GET(request: NextRequest) {
     where: { workspaceId, ...accountFilter },
     include: {
       instagramAccount: {
-        select: { username: true, instagramId: true },
+        select: { username: true, instagramId: true, platform: true },
       },
       _count: {
         select: { dmLogs: true },
@@ -341,6 +343,18 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Threads / YouTube answer in public only: insist on several different
+  // replies, so the account never posts the same text over and over (spam).
+  if (instagramAccount.platform === "THREADS" || instagramAccount.platform === "YOUTUBE") {
+    const variants = new Set((parsed.data.publicReplyMessages ?? []).map((m) => m.trim().toLowerCase()).filter(Boolean));
+    if (!parsed.data.publicReplyEnabled || variants.size < 3) {
+      return NextResponse.json(
+        { success: false, error: `${instagramAccount.platform === "THREADS" ? "Threads" : "YouTube"}: add at least 3 different public replies (they rotate, so it never looks like spam)` },
+        { status: 400 }
+      );
+    }
+  }
+
   const { trackedDestinationUrl, secondaryDestinationUrl, secondaryButtonLabel } =
     parsed.data;
 
@@ -386,6 +400,7 @@ export async function POST(request: NextRequest) {
   const automation = await prisma.automation.create({
     data: {
       name: parsed.data.name,
+      groupId: parsed.data.groupId ?? null,
       goal: parsed.data.goal,
       // A next-reel campaign has no post yet; the cron binds it once a reel is posted.
       postId: isSpecificPost ? parsed.data.postId : null,

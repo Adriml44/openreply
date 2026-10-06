@@ -251,3 +251,48 @@ export function parseReadEvents(payload: WebhookPayload): WebhookReadEvent[] {
 
   return events;
 }
+
+/**
+ * Facebook Pages send webhooks with object "page": comments arrive as "feed"
+ * changes and messages/postbacks in "messaging", like Instagram's. This turns a
+ * Page payload into the Instagram shape (ids prefixed "fb:"), so the parsers
+ * above and the whole pipeline after them handle Facebook without changes.
+ * Only top-level comments count: replies to comments (including our own public
+ * replies) are ignored, so the bot never talks to itself.
+ */
+export function normalizePagePayload(payload: unknown): unknown {
+  const p = payload as { object?: string; entry?: Array<Record<string, unknown>> };
+  if (!p || p.object !== "page" || !Array.isArray(p.entry)) return payload;
+  const fb = (id: unknown) => (typeof id === "string" || typeof id === "number" ? `fb:${id}` : undefined);
+  return {
+    object: "instagram",
+    entry: p.entry.map((entry) => {
+      const changes = (entry.changes as Array<{ field: string; value: Record<string, unknown> }> | undefined) ?? [];
+      const messaging = (entry.messaging as Array<Record<string, unknown>> | undefined) ?? [];
+      return {
+        id: fb(entry.id),
+        time: entry.time,
+        changes: changes
+          .filter((c) => c.field === "feed" && c.value?.item === "comment" && c.value?.verb === "add"
+            && (!c.value.parent_id || c.value.parent_id === c.value.post_id))
+          .map((c) => {
+            const from = (c.value.from as { id?: string; name?: string } | undefined) ?? {};
+            return {
+              field: "comments",
+              value: {
+                id: fb(c.value.comment_id),
+                text: (c.value.message as string | undefined) ?? "",
+                from: { id: fb(from.id), username: from.name },
+                media: { id: fb(c.value.post_id) },
+              },
+            };
+          }),
+        messaging: messaging.map((m) => ({
+          ...m,
+          sender: m.sender ? { id: fb((m.sender as { id?: string }).id) } : undefined,
+          recipient: m.recipient ? { id: fb((m.recipient as { id?: string }).id) } : undefined,
+        })),
+      };
+    }),
+  };
+}

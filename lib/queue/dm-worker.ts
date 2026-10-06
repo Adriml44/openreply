@@ -27,7 +27,9 @@ import {
 } from "@/lib/meta/client";
 import { decryptToken } from "@/lib/meta/oauth";
 import { matchKeywords } from "@/lib/utils/keyword-matcher";
-import { reserveDMSlot } from "@/lib/utils/rate-limiter";
+import { reserveDMSlot, reservePublicReplySlot } from "@/lib/utils/rate-limiter";
+import { platformOf, supportsDm } from "@/lib/social/ids";
+import { notifyCrmLead } from "@/lib/crm";
 import {
   releaseWorkspaceDMReservation,
   reserveWorkspaceDMSend,
@@ -317,6 +319,46 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
       continue;
     }
 
+    const platform = platformOf(instagramAccountId);
+    const publicOnly = !supportsDm(platform);
+
+    /* Anti-spam: one answer per person per campaign every 24 h. Someone who
+       comments «LINK» five times gets one reply, not five — repeated identical
+       replies to the same user are what gets accounts flagged. */
+    if (!existingLog) {
+      const recent = await prisma.dmLog.findFirst({
+        where: {
+          automationId: automation.id,
+          commenterId,
+          commentId: { not: commentId },
+          createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+          OR: [{ status: "SENT" }, { publicReplySentAt: { not: null } }],
+        },
+        select: { id: true },
+      });
+      if (recent) {
+        await prisma.dmLog.create({
+          data: {
+            workspaceId: automation.workspaceId, automationId: automation.id, instagramAccountId: automation.instagramAccountId,
+            commenterId, commenterName, commentText, commentId, matchedKeyword: matchResult.matchedKeyword,
+            status: "SKIPPED_DEDUP", errorMessage: "Already answered this person in the last 24 h",
+          },
+        });
+        continue;
+      }
+    }
+
+    /* Threads and YouTube: public replies only, under conservative caps. Over
+       the cap the comment waits and is retried later instead of being dropped. */
+    if (publicOnly && automation.publicReplyEnabled && !existingLog?.publicReplySentAt) {
+      const slot = await reservePublicReplySlot(instagramAccountId, platform);
+      if (!slot.allowed) {
+        await getDMQueue().add("process-comment", { ...job.data, requeueAttempt: requeueAttempt + 1 },
+          { delay: slot.retryInMs + Math.floor(Math.random() * 120_000) });
+        continue;
+      }
+    }
+
     // Ensure a log row exists before the public reply leg (which updates it).
     // Only (re)set PENDING when the DM will actually be attempted, so a prior
     // SENT is never clobbered while we come back just to retry the public reply.
@@ -391,6 +433,23 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           })
           .catch(() => {});
       }
+    }
+
+    // Threads / YouTube: there is no DM. The public reply was the whole job.
+    if (publicOnly) {
+      const log = await prisma.dmLog.findUnique({
+        where: { automationId_commentId: { automationId: automation.id, commentId } },
+        select: { publicReplySentAt: true, publicReplyError: true },
+      });
+      const ok = Boolean(log?.publicReplySentAt);
+      await prisma.dmLog.update({
+        where: { automationId_commentId: { automationId: automation.id, commentId } },
+        data: ok
+          ? { status: "SENT", dmSentAt: log!.publicReplySentAt, errorMessage: null }
+          : { status: "FAILED", errorMessage: log?.publicReplyError ?? (automation.publicReplyEnabled ? "Public reply failed" : "This network has no DMs: turn on the public reply") },
+      });
+      if (ok) void notifyCrmLead({ automationName: automation.name, platform, commenterName, commenterId, commentText });
+      continue;
     }
 
     // DM already sent on an earlier pass; the public reply retry above was all
@@ -649,6 +708,8 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           errorMessage: null,
         },
       });
+      // Into the RelevX CRM as a lead (if configured; never blocks the DM).
+      void notifyCrmLead({ automationName: automation.name, platform, commenterName, commenterId, commentText });
     } catch (error) {
       await releaseWorkspaceDMReservation(
         automation.workspaceId,

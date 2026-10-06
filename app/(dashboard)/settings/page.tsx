@@ -3,6 +3,8 @@
 import { Suspense, useEffect, useState } from "react";
 import type { AccountOption } from "@/components/account-select";
 import { InstagramConnectNotice } from "@/components/instagram-connect-notice";
+import { SocialConnectNotice } from "@/components/social-connect-notice";
+import { accountLabel, PLATFORM_NAME } from "@/components/account-select";
 
 interface SettingsData {
   workspace: {
@@ -134,10 +136,11 @@ export default function SettingsPage() {
           page fails the production build without one. */}
       <Suspense fallback={null}>
         <InstagramConnectNotice />
+        <SocialConnectNotice />
       </Suspense>
 
       <section className="panel rounded p-4 sm:p-6">
-        <h2 className="text-base font-semibold mb-6">Instagram Connection</h2>
+        <h2 className="text-base font-semibold mb-6">Connected accounts</h2>
 
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-3 py-3 border-b border-border">
@@ -162,8 +165,7 @@ export default function SettingsPage() {
             <div>
               <p className="text-sm font-medium text-foreground">Accounts</p>
               <p className="text-xs text-muted mt-0.5">
-                {accounts.length} connected Instagram profile
-                {accounts.length === 1 ? "" : "s"}
+                {accounts.length} connected account{accounts.length === 1 ? "" : "s"} (Instagram, Facebook, Threads, YouTube)
               </p>
             </div>
             <span className="text-sm text-muted">
@@ -184,7 +186,8 @@ export default function SettingsPage() {
               >
                 <div>
                   <p className="text-sm font-semibold text-foreground">
-                    @{account.username}
+                    {accountLabel(account)}{" "}
+                    <span className="text-xs font-normal text-muted">· {PLATFORM_NAME[account.platform ?? "INSTAGRAM"]}</span>
                   </p>
                   <p className="mt-1 text-xs text-muted">
                     Token expires{" "}
@@ -208,13 +211,19 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <div className="mt-6 pt-4 border-t border-border flex gap-3">
+        <div className="mt-6 pt-4 border-t border-border flex flex-wrap gap-3">
           <a
             href="/api/instagram/connect"
             className="px-4 py-2 rounded text-sm font-medium transition-colors bg-accent text-white hover:bg-accent-hover"
           >
-            {accounts.length > 0 ? "Connect another account" : "Connect Instagram"}
+            {accounts.length > 0 ? "Connect another Instagram" : "Connect Instagram"}
           </a>
+          {[["facebook", "📘 Connect Facebook Page"], ["threads", "🧵 Connect Threads"], ["youtube", "▶️ Connect YouTube"]].map(([k, t]) => (
+            <a key={k} href={`/api/${k}/connect`}
+              className="px-4 py-2 rounded text-sm font-medium transition-colors border border-border text-foreground hover:bg-surface">
+              {t}
+            </a>
+          ))}
         </div>
       </section>
 

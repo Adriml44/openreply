@@ -3,6 +3,8 @@ import { getCurrentWorkspaceId } from "@/lib/auth";
 import { getWorkspaceInstagramAccount } from "@/lib/instagram-accounts";
 import { getAllUserMedia, getUserMedia } from "@/lib/meta/client";
 import { decryptToken } from "@/lib/meta/oauth";
+import { platformOf } from "@/lib/social/ids";
+import { getPlatformMedia } from "@/lib/social/platforms";
 
 export async function GET(request: NextRequest) {
   const workspaceId = await getCurrentWorkspaceId();
@@ -35,7 +37,10 @@ export async function GET(request: NextRequest) {
     // otherwise return a single recent page.
     const loadAll = request.nextUrl.searchParams.get("all") === "true";
     let posts;
-    if (loadAll) {
+    // Facebook Pages, Threads and YouTube list their own recent posts/videos.
+    if (platformOf(account.instagramId) !== "INSTAGRAM") {
+      posts = await getPlatformMedia(account.instagramId, accessToken, loadAll ? 50 : 25);
+    } else if (loadAll) {
       posts = await getAllUserMedia(accessToken, 300);
     } else {
       const limitParam = request.nextUrl.searchParams.get("limit");
