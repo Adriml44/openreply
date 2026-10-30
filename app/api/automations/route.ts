@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentWorkspaceId } from "@/lib/auth";
+import { workspaceFromCrmKey } from "@/lib/crm";
 import { prisma } from "@/lib/db/client";
 import { calculateCtr, normalizeTopKeywords } from "@/lib/tracking/analytics";
 import { buildTrackedUrl } from "@/lib/tracking/message";
@@ -278,24 +279,29 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const context = await getCurrentWorkspaceContext();
-  if (!context) {
+  const body = await request.json();
+  // The RelevX CRM creates campaigns with a shared key instead of a session (see lib/crm.ts).
+  const crmWorkspaceId = await workspaceFromCrmKey(
+    request.headers.get("x-clave"),
+    body?.instagramAccountId
+  );
+  const context = crmWorkspaceId ? null : await getCurrentWorkspaceContext();
+  if (!crmWorkspaceId && !context) {
     return NextResponse.json(
       { success: false, error: "Unauthorized" },
       { status: 401 }
     );
   }
 
-  if (!canManageWorkspace(context.role)) {
+  if (context && !canManageWorkspace(context.role)) {
     return NextResponse.json(
       { success: false, error: "Only owners and admins can create campaigns" },
       { status: 403 }
     );
   }
 
-  const workspaceId = context.workspaceId;
+  const workspaceId = crmWorkspaceId ?? context!.workspaceId;
 
-  const body = await request.json();
   const parsed = createAutomationSchema.safeParse(body);
 
   if (!parsed.success) {
