@@ -13,4 +13,10 @@ describe("CRM API key", () => {
     expect(crmKeyMatches("s3cret", "s3cret-key")).toBe(false);
     expect(crmKeyMatches(null, "s3cret-key")).toBe(false);
   });
+
+  it("ignores surrounding whitespace from pasted keys", () => {
+    expect(crmKeyMatches("s3cret-key", "s3cret-key\n")).toBe(true);
+    expect(crmKeyMatches(" s3cret-key ", "s3cret-key")).toBe(true);
+    expect(crmKeyMatches("   ", "   ")).toBe(false);
+  });
 });

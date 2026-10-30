@@ -48,9 +48,12 @@ export async function notifyCrmLead(lead: {
  * CRM_API_KEY is set.
  */
 export function crmKeyMatches(sent: string | null | undefined, expected = process.env.CRM_API_KEY): boolean {
-  if (!expected || !sent) return false;
-  const a = Buffer.from(sent);
-  const b = Buffer.from(expected);
+  // Pasted keys often carry a trailing newline: compare them trimmed.
+  const want = expected?.trim();
+  const got = sent?.trim();
+  if (!want || !got) return false;
+  const a = Buffer.from(got);
+  const b = Buffer.from(want);
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
