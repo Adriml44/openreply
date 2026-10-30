@@ -5,6 +5,8 @@
  * and CRM_HOOK_KEY are set (CRM_HOOK_URL = https://crm.relevx.com/hook/openreply).
  * It never blocks or fails a send: errors are only logged.
  */
+import { timingSafeEqual } from "node:crypto";
+import { prisma } from "@/lib/db/client";
 import type { Platform } from "@/lib/social/ids";
 import { PLATFORM_LABEL, rawId } from "@/lib/social/ids";
 
@@ -36,4 +38,30 @@ export async function notifyCrmLead(lead: {
   } catch (error) {
     console.warn("[CRM] lead not sent:", error instanceof Error ? error.message : error);
   }
+}
+
+/**
+ * The other direction: the CRM creating campaigns (it publishes reels on its
+ * own and then attaches a campaign to each one). It sends the shared key in
+ * `X-Clave`; the campaign goes to the workspace that owns the account it
+ * targets, so the key cannot reach accounts outside this instance. Off unless
+ * CRM_API_KEY is set.
+ */
+export function crmKeyMatches(sent: string | null | undefined, expected = process.env.CRM_API_KEY): boolean {
+  if (!expected || !sent) return false;
+  const a = Buffer.from(sent);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+export async function workspaceFromCrmKey(
+  sentKey: string | null,
+  instagramAccountId: unknown
+): Promise<string | null> {
+  if (!crmKeyMatches(sentKey) || typeof instagramAccountId !== "string" || !instagramAccountId) return null;
+  const account = await prisma.instagramAccount.findUnique({
+    where: { id: instagramAccountId },
+    select: { workspaceId: true },
+  });
+  return account?.workspaceId ?? null;
 }
