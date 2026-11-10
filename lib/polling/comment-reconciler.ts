@@ -170,11 +170,11 @@ async function sweepCampaign(
     }
     cache.tokens.set(account.id, accessToken);
   }
-  const token = accessToken;
   if (!accessToken) {
     stat.errors.push("Failed to decrypt access token");
     return stat;
   }
+  const token = accessToken;
 
   // Which media this campaign covers: its own post, or the recent feed if it
   // matches any post.
