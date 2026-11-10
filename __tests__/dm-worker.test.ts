@@ -90,6 +90,8 @@ vi.mock("@/lib/meta/oauth", () => ({
 
 vi.mock("@/lib/utils/keyword-matcher", () => ({
   matchKeywords: mockMatchKeywords,
+  matchCampaignComment: (text: string, c: { keywords: string[]; wholeWordMatch: boolean; matchAnyWord: boolean }) =>
+    c.matchAnyWord ? { matched: true, matchedKeyword: null } : mockMatchKeywords(text, c.keywords, c.wholeWordMatch),
 }));
 
 vi.mock("@/lib/utils/rate-limiter", () => ({

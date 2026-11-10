@@ -26,7 +26,7 @@ import {
   sendPrivateReplyWithLinkButton,
 } from "@/lib/meta/client";
 import { decryptToken } from "@/lib/meta/oauth";
-import { matchKeywords } from "@/lib/utils/keyword-matcher";
+import { matchCampaignComment, matchKeywords } from "@/lib/utils/keyword-matcher";
 import { reserveDMSlot, reservePublicReplySlot } from "@/lib/utils/rate-limiter";
 import { isAnonymousCommenter, platformOf, supportsDm } from "@/lib/social/ids";
 import { notifyCrmLead } from "@/lib/crm";
@@ -226,14 +226,9 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
   });
 
   for (const automation of automations) {
-    // "Any word" campaigns fire on every comment; otherwise require a keyword hit.
-    const matchResult = automation.matchAnyWord
-      ? { matched: true, matchedKeyword: null }
-      : matchKeywords(
-          commentText,
-          automation.keywords,
-          automation.wholeWordMatch
-        );
+    // "Any word" campaigns fire on every comment; otherwise require a keyword
+    // hit (and, on "any post" campaigns, a short comment).
+    const matchResult = matchCampaignComment(commentText, automation);
 
     if (!matchResult.matched) {
       continue;

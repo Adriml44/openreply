@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { normalizePagePayload, parseCommentEvents } from "@/lib/meta/webhook";
 import { anonymousCommenterId, isAnonymousCommenter } from "@/lib/social/ids";
 import { getPlatformComments } from "@/lib/social/platforms";
-import { matchKeywords, editDistance } from "@/lib/utils/keyword-matcher";
+import { matchKeywords, editDistance, matchCampaignComment, wordCount } from "@/lib/utils/keyword-matcher";
 
 const MULTI = ["multiagente", "multiagentes", "multi agente", "multi agentes"];
 
@@ -76,5 +76,32 @@ describe("unnamed Facebook commenters", () => {
 
     expect(comments).toEqual([]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("any-post campaigns only answer short comments", () => {
+  const ia = { keywords: ["IA", "ia"], wholeWordMatch: true, matchAnyWord: false, matchAnyPost: true };
+  const multi = { keywords: MULTI, wholeWordMatch: true, matchAnyWord: false, matchAnyPost: true };
+
+  it("answers the call to action itself", () => {
+    expect(matchCampaignComment("IA", ia).matched).toBe(true);
+    expect(matchCampaignComment("Quiero la IA 🙏", ia).matched).toBe(true);
+    expect(matchCampaignComment("MULTIAGENTES 🙌🙌", multi).matched).toBe(true);
+    expect(matchCampaignComment("multiagentes por favor pásamelo", multi).matched).toBe(true);
+  });
+
+  it("ignores sentences that only mention the word", () => {
+    expect(matchCampaignComment("Jajaja neta usan algo tan poderoso como la IA para hacer eso", ia).matched).toBe(false);
+    expect(matchCampaignComment("se nota que es IA diseño básico estándar cientos de páginas iguales", ia).matched).toBe(false);
+  });
+
+  it("keeps the old behaviour for campaigns tied to one post", () => {
+    const onePost = { ...ia, matchAnyPost: false };
+    expect(matchCampaignComment("Jajaja neta usan algo tan poderoso como la IA para hacer eso", onePost).matched).toBe(true);
+  });
+
+  it("counts words without emojis or punctuation", () => {
+    expect(wordCount("MULTIAGENTES 🙌🙌!!")).toBe(1);
+    expect(wordCount("")).toBe(0);
   });
 });

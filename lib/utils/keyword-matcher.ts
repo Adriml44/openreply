@@ -106,6 +106,31 @@ export function matchKeywords(
   return { matched: false, matchedKeyword: null };
 }
 
+/**
+ * "Any post" campaigns listen on every post, so a keyword like «IA» or
+ * «identidad» would otherwise fire on any sentence that happens to contain it
+ * («se nota que es IA…»). People answering a call to action write the word and
+ * little else, so those campaigns only consider short comments.
+ */
+export const ANY_POST_MAX_WORDS = 5;
+
+export function wordCount(text: string): number {
+  const cleaned = stripSpecialCharacters(text ?? "");
+  return cleaned ? cleaned.split(" ").length : 0;
+}
+
+/** The comment-matching rule for a campaign (keywords, any word, any post). */
+export function matchCampaignComment(
+  commentText: string,
+  campaign: { keywords: string[]; wholeWordMatch: boolean; matchAnyWord: boolean; matchAnyPost: boolean }
+): KeywordMatchResult {
+  if (campaign.matchAnyWord) return { matched: true, matchedKeyword: null };
+  if (campaign.matchAnyPost && wordCount(commentText) > ANY_POST_MAX_WORDS) {
+    return { matched: false, matchedKeyword: null };
+  }
+  return matchKeywords(commentText, campaign.keywords, campaign.wholeWordMatch);
+}
+
 /** How many typos a keyword tolerates: none under 8 letters, 1 for 8-9, 2 from 10. */
 export function typoAllowance(keyword: string): number {
   const n = [...keyword].length;
