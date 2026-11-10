@@ -40,7 +40,7 @@ import {
   type InstagramComment,
 } from "@/lib/meta/client";
 import { decryptToken } from "@/lib/meta/oauth";
-import { matchKeywords } from "@/lib/utils/keyword-matcher";
+import { matchCampaignComment } from "@/lib/utils/keyword-matcher";
 import { isAnonymousCommenter, platformOf, supportsDm } from "@/lib/social/ids";
 import { getPlatformComments, getPlatformMedia } from "@/lib/social/platforms";
 
@@ -219,10 +219,7 @@ async function sweepCampaign(
       const authorId = c.from?.id;
       if (!authorId || authorId === account.instagramId) return false;
 
-      const matched = automation.matchAnyWord
-        ? true
-        : matchKeywords(c.text ?? "", automation.keywords, automation.wholeWordMatch)
-            .matched;
+      const matched = matchCampaignComment(c.text ?? "", automation).matched;
       if (!matched) return false;
       stat.matched += 1;
 
