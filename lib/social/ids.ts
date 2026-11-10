@@ -39,6 +39,20 @@ export function supportsDm(platform: Platform): boolean {
   return platform === "INSTAGRAM" || platform === "FACEBOOK";
 }
 
+/**
+ * Facebook hides who wrote a comment (no `from`) unless the commenter is a Page
+ * or the app has advanced access to user content. Such comments still deserve a
+ * reply: they get a per-comment stand-in id, are answered in public only (there
+ * is nobody to DM) and are never sent to the CRM.
+ */
+export function anonymousCommenterId(commentId: string): string {
+  return `fb:anon-${rawId(commentId)}`;
+}
+
+export function isAnonymousCommenter(id: string | null | undefined): boolean {
+  return Boolean(id?.startsWith("fb:anon-"));
+}
+
 /** Only Instagram tells us whether someone follows the account. */
 export function canVerifyFollow(platform: Platform): boolean {
   return platform === "INSTAGRAM";

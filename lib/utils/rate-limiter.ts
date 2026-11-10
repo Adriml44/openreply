@@ -237,6 +237,8 @@ export { RATE_LIMIT_MAX, RATE_LIMIT_WINDOW, REQUEUE_DELAY_MS, MAX_REQUEUE_ATTEMP
 const PUBLIC_REPLY_CAPS: Record<string, { hour: number; day: number }> = {
   THREADS: { hour: 30, day: 200 },
   YOUTUBE: { hour: 12, day: 80 },
+  // Only unnamed commenters (public reply, no DM) go through this cap.
+  FACEBOOK: { hour: 60, day: 600 },
 };
 
 export async function reservePublicReplySlot(

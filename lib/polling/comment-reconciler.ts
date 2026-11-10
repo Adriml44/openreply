@@ -41,7 +41,7 @@ import {
 } from "@/lib/meta/client";
 import { decryptToken } from "@/lib/meta/oauth";
 import { matchKeywords } from "@/lib/utils/keyword-matcher";
-import { platformOf, supportsDm } from "@/lib/social/ids";
+import { isAnonymousCommenter, platformOf, supportsDm } from "@/lib/social/ids";
 import { getPlatformComments, getPlatformMedia } from "@/lib/social/platforms";
 
 // Only consider comments from the last few days — older ones are outside
@@ -275,8 +275,8 @@ async function sweepCampaign(
         commenterName: c.from?.username,
         mediaId,
         source: "POLLING",
-      }, publicOnly
-        // Public replies on Threads/YouTube go out spread over a few minutes, like a person answering.
+      }, publicOnly || isAnonymousCommenter(c.from!.id)
+        // Public replies (Threads, YouTube, unnamed Facebook commenters) go out spread over a few minutes, like a person answering.
         ? { delay: 30_000 + Math.floor(Math.random() * 150_000) * (stat.enqueued + 1) }
         : undefined);
       stat.enqueued += 1;

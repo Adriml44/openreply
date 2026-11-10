@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "crypto";
+import { anonymousCommenterId } from "@/lib/social/ids";
 
 export function verifyWebhookSignature(
   payload: string,
@@ -282,7 +283,8 @@ export function normalizePagePayload(payload: unknown): unknown {
               value: {
                 id: fb(c.value.comment_id),
                 text: (c.value.message as string | undefined) ?? "",
-                from: { id: fb(from.id), username: from.name },
+                // Facebook omits `from` for people it won't name to this app.
+                from: { id: fb(from.id) ?? (c.value.comment_id ? anonymousCommenterId(`fb:${c.value.comment_id}`) : undefined), username: from.name },
                 media: { id: fb(c.value.post_id) },
               },
             };
