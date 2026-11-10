@@ -20,6 +20,12 @@
  * fire once a day. Matching and sending reuse the worker's processComment, so
  * rate limiting and logging behave exactly as for webhook-delivered comments.
  *
+ * Reads are shared within a sweep: an account's recent media and each media's
+ * comments are fetched once and reused by every campaign on that account.
+ * Several "any post" campaigns on one account would otherwise each re-read the
+ * same feed — on YouTube that multiplied the Data API cost and burned the daily
+ * quota by mid-afternoon.
+ *
  * Known limitation, handled not fixed: comments removed by Instagram's Hidden
  * Words / spam filter may not be returned by the Graph API at all. Disable that
  * filter on the account to widen results.
@@ -46,6 +52,23 @@ const LOOKBACK_HOURS = Number(process.env.COMMENT_POLL_LOOKBACK_HOURS ?? 72);
 const MAX_NEW_PER_SWEEP = Number(process.env.COMMENT_POLL_MAX_PER_SWEEP ?? 30);
 // For "any post" campaigns, how many recent posts to scan.
 const RECENT_MEDIA_LIMIT = 10;
+
+/** Per-sweep cache, shared by every campaign in one pass. Stores promises so a
+ * failed read is also shared (each campaign logs it) instead of retried. */
+interface SweepCache {
+  tokens: Map<string, string | null>;
+  media: Map<string, Promise<string[]>>;
+  comments: Map<string, Promise<InstagramComment[]>>;
+}
+
+function cached<T>(map: Map<string, Promise<T>>, key: string, load: () => Promise<T>): Promise<T> {
+  let p = map.get(key);
+  if (!p) {
+    p = load();
+    map.set(key, p);
+  }
+  return p;
+}
 
 interface SweepStat {
   campaign: string;
@@ -88,10 +111,10 @@ export async function reconcileComments(): Promise<void> {
   });
 
   const sinceMs = Date.now() - LOOKBACK_HOURS * 60 * 60 * 1000;
-  const tokenCache = new Map<string, string | null>();
+  const cache: SweepCache = { tokens: new Map(), media: new Map(), comments: new Map() };
 
   for (const automation of automations) {
-    const stat = await sweepCampaign(automation, sinceMs, tokenCache).catch(
+    const stat = await sweepCampaign(automation, sinceMs, cache).catch(
       (error): SweepStat => ({
         campaign: automation.name,
         keywords: automation.keywords.join(","),
@@ -123,7 +146,7 @@ async function sweepCampaign(
     };
   },
   sinceMs: number,
-  tokenCache: Map<string, string | null>
+  cache: SweepCache
 ): Promise<SweepStat> {
   const account = automation.instagramAccount;
   const stat: SweepStat = {
@@ -138,19 +161,20 @@ async function sweepCampaign(
   };
 
   // Decrypt the account token once per sweep.
-  let accessToken = tokenCache.get(account.id);
+  let accessToken = cache.tokens.get(account.id);
   if (accessToken === undefined) {
     try {
       accessToken = decryptToken(account.accessToken);
     } catch {
       accessToken = null;
     }
-    tokenCache.set(account.id, accessToken);
+    cache.tokens.set(account.id, accessToken);
   }
   if (!accessToken) {
     stat.errors.push("Failed to decrypt access token");
     return stat;
   }
+  const token = accessToken;
 
   // Which media this campaign covers: its own post, or the recent feed if it
   // matches any post.
@@ -160,10 +184,14 @@ async function sweepCampaign(
   } else if (automation.matchAnyPost) {
     try {
       // Facebook, Threads and YouTube read their own feeds (lib/social).
-      const media = platformOf(account.instagramId) === "INSTAGRAM"
-        ? await getUserMedia(accessToken, RECENT_MEDIA_LIMIT)
-        : await getPlatformMedia(account.instagramId, accessToken, RECENT_MEDIA_LIMIT);
-      mediaIds.push(...media.map((m) => m.id));
+      // Read once per account per sweep, shared by all its campaigns.
+      const ids = await cached(cache.media, account.id, async () => {
+        const media = platformOf(account.instagramId) === "INSTAGRAM"
+          ? await getUserMedia(token, RECENT_MEDIA_LIMIT)
+          : await getPlatformMedia(account.instagramId, token, RECENT_MEDIA_LIMIT);
+        return media.map((m) => m.id);
+      });
+      mediaIds.push(...ids);
     } catch (error) {
       stat.errors.push(`Media list: ${errMessage(error)}`);
     }
@@ -176,9 +204,10 @@ async function sweepCampaign(
   for (const mediaId of mediaIds) {
     let comments: InstagramComment[];
     try {
-      comments = platformOf(account.instagramId) === "INSTAGRAM"
-        ? await getRecentMediaComments(accessToken, mediaId, sinceMs)
-        : await getPlatformComments(account.instagramId, accessToken, mediaId, sinceMs);
+      comments = await cached(cache.comments, `${account.id}|${mediaId}`, () =>
+        platformOf(account.instagramId) === "INSTAGRAM"
+          ? getRecentMediaComments(token, mediaId, sinceMs)
+          : getPlatformComments(account.instagramId, token, mediaId, sinceMs));
     } catch (error) {
       stat.errors.push(`Comments ${mediaId}: ${errMessage(error)}`);
       continue;
