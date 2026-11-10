@@ -28,7 +28,7 @@ import {
 import { decryptToken } from "@/lib/meta/oauth";
 import { matchKeywords } from "@/lib/utils/keyword-matcher";
 import { reserveDMSlot, reservePublicReplySlot } from "@/lib/utils/rate-limiter";
-import { platformOf, supportsDm } from "@/lib/social/ids";
+import { isAnonymousCommenter, platformOf, supportsDm } from "@/lib/social/ids";
 import { notifyCrmLead } from "@/lib/crm";
 import {
   releaseWorkspaceDMReservation,
@@ -320,7 +320,9 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
     }
 
     const platform = platformOf(instagramAccountId);
-    const publicOnly = !supportsDm(platform);
+    // Unnamed Facebook commenters can't be messaged: public reply only.
+    const anonymous = isAnonymousCommenter(commenterId);
+    const publicOnly = !supportsDm(platform) || anonymous;
 
     /* Anti-spam: one answer per person per campaign every 24 h. Someone who
        comments «LINK» five times gets one reply, not five — repeated identical
@@ -448,7 +450,7 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           ? { status: "SENT", dmSentAt: log!.publicReplySentAt, errorMessage: null }
           : { status: "FAILED", errorMessage: log?.publicReplyError ?? (automation.publicReplyEnabled ? "Public reply failed" : "This network has no DMs: turn on the public reply") },
       });
-      if (ok) void notifyCrmLead({ automationName: automation.name, platform, commenterName, commenterId, commentText });
+      if (ok && !anonymous) void notifyCrmLead({ automationName: automation.name, platform, commenterName, commenterId, commentText });
       continue;
     }
 

@@ -87,5 +87,48 @@ export function matchKeywords(
     }
   }
 
+  // Typos: «multiajentes», «mutliagente», «multi agentes»… Only long keywords
+  // get this leeway, so short ones («IA», «EMAIL») never match by accident.
+  const words = cleanedText.split(" ");
+  const candidates = new Set(words);
+  for (let i = 0; i + 1 < words.length; i++) candidates.add(words[i] + words[i + 1]);
+  for (const keyword of keywords) {
+    const k = stripSpecialCharacters(keyword).toLowerCase().replace(/ /g, "");
+    const allowed = typoAllowance(k);
+    if (allowed === 0) continue;
+    for (const c of candidates) {
+      if (Math.abs(c.length - k.length) <= allowed && editDistance(c, k) <= allowed) {
+        return { matched: true, matchedKeyword: keyword };
+      }
+    }
+  }
+
   return { matched: false, matchedKeyword: null };
+}
+
+/** How many typos a keyword tolerates: none under 8 letters, 1 for 8-9, 2 from 10. */
+export function typoAllowance(keyword: string): number {
+  const n = [...keyword].length;
+  if (n >= 10) return 2;
+  if (n >= 8) return 1;
+  return 0;
+}
+
+/** Edit distance counting a swap of two neighbouring letters as one typo. */
+export function editDistance(a: string, b: string): number {
+  const s = [...a];
+  const t = [...b];
+  const d: number[][] = Array.from({ length: s.length + 1 }, (_, i) =>
+    Array.from({ length: t.length + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
+  );
+  for (let i = 1; i <= s.length; i++) {
+    for (let j = 1; j <= t.length; j++) {
+      const cost = s[i - 1] === t[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+      if (i > 1 && j > 1 && s[i - 1] === t[j - 2] && s[i - 2] === t[j - 1]) {
+        d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+      }
+    }
+  }
+  return d[s.length][t.length];
 }

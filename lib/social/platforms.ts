@@ -7,7 +7,7 @@
  */
 import { getMetaGraphApiVersion } from "@/lib/env";
 import type { InstagramComment, InstagramMedia } from "@/lib/meta/client";
-import { platformOf, rawId, withPrefix } from "./ids";
+import { anonymousCommenterId, platformOf, rawId, withPrefix } from "./ids";
 
 const fb = () => `https://graph.facebook.com/${getMetaGraphApiVersion()}`;
 const THREADS = "https://graph.threads.net/v1.0";
@@ -52,6 +52,9 @@ export async function youtubeAccessToken(refreshToken: string): Promise<string> 
   ytTokens.set(refreshToken, { token: d.access_token, until: Date.now() + d.expires_in * 1000 });
   return d.access_token;
 }
+
+/** Pages of 100 comments read per Facebook post per sweep. */
+const FB_COMMENT_PAGES = 15;
 
 /* -------------------------------------------------------------- recent posts */
 export async function getPlatformMedia(accountId: string, token: string, limit = 25): Promise<InstagramMedia[]> {
@@ -101,10 +104,23 @@ export async function getPlatformComments(accountId: string, token: string, medi
     u.searchParams.set("order", "reverse_chronological");
     u.searchParams.set("limit", "100");
     u.searchParams.set("access_token", token);
-    const d = await json<{ data: Array<{ id: string; message?: string; created_time: string; from?: { id: string; name?: string }; comments?: { data: Array<{ id: string; from?: { id: string } }> } }> }>("Facebook", await fetch(u));
-    return d.data.filter((c) => recent(c.created_time)).map((c) => ({
+    type FbComment = { id: string; message?: string; created_time: string; from?: { id: string; name?: string }; comments?: { data: Array<{ id: string; from?: { id: string } }> } };
+    // Newest first: keep paging until the comments are older than the window (a
+    // viral post has far more than one page). Capped so one post can't run away.
+    const all: FbComment[] = [];
+    let next: string | undefined = u.toString();
+    for (let page = 0; next && page < FB_COMMENT_PAGES; page++) {
+      const d: { data: FbComment[]; paging?: { next?: string } } = await json("Facebook", await fetch(next));
+      all.push(...d.data);
+      const last = d.data[d.data.length - 1];
+      next = last && recent(last.created_time) ? d.paging?.next : undefined;
+    }
+    return all.filter((c) => recent(c.created_time)).map((c) => ({
       id: withPrefix("FACEBOOK", c.id), text: c.message ?? "", timestamp: c.created_time,
-      from: c.from ? { id: withPrefix("FACEBOOK", c.from.id), username: c.from.name } : undefined,
+      // No `from` = a person Facebook won't name to this app: answer in public anyway.
+      from: c.from
+        ? { id: withPrefix("FACEBOOK", c.from.id), username: c.from.name }
+        : { id: anonymousCommenterId(withPrefix("FACEBOOK", c.id)) },
       replies: { data: (c.comments?.data ?? []).map((r) => ({ id: r.id, from: r.from ? { id: withPrefix("FACEBOOK", r.from.id) } : undefined })) },
     }));
   }
